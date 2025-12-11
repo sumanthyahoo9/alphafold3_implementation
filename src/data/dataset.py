@@ -278,49 +278,71 @@ class AlphaFold3Dataset(Dataset):
         for key in batch[0].keys():
             example_tensor = batch[0][key]
             
-            if 'token' in key or key in ['restype', 'is_protein', 'is_rna', 'is_dna', 'is_ligand']:
+            # Determine shape based on feature type
+            if 'token' in key or key in ['restype', 'is_protein', 'is_rna', 'is_dna', 'is_ligand', 'asym_id', 'entity_id', 'sym_id', 'residue_index']:
                 # Token-level features [N_token, ...]
                 shape = (batch_size, max_n_tokens) + example_tensor.shape[1:]
-            elif 'ref_' in key and key != 'ref_space_uid':
+                padded = torch.zeros(shape, dtype=example_tensor.dtype)
+                for i, b in enumerate(batch):
+                    n = b[key].shape[0]
+                    padded[i, :n] = b[key]
+                    
+            elif 'ref_' in key:
                 # Atom-level features [N_atom, ...]
                 shape = (batch_size, max_n_atoms) + example_tensor.shape[1:]
-            elif 'msa' in key or 'deletion' in key or 'profile' in key:
-                # MSA features
-                if example_tensor.ndim == 3:  # [N_msa, N_token, ...]
+                padded = torch.zeros(shape, dtype=example_tensor.dtype)
+                for i, b in enumerate(batch):
+                    n = b[key].shape[0]
+                    padded[i, :n] = b[key]
+                    
+            elif key in ['msa', 'has_deletion', 'deletion_value']:
+                # MSA features [N_msa, N_token, ...]
+                if example_tensor.ndim == 3:  # [N_msa, N_token, 32]
                     shape = (batch_size, max_n_msa, max_n_tokens) + example_tensor.shape[2:]
-                elif example_tensor.ndim == 2:  # [N_msa, N_token]
+                else:  # [N_msa, N_token]
                     shape = (batch_size, max_n_msa, max_n_tokens)
-                else:  # [N_token, ...]
-                    shape = (batch_size, max_n_tokens) + example_tensor.shape[1:]
-            elif key == 'ref_space_uid':
-                shape = (batch_size, max_n_atoms)
-            else:
-                # Default: don't pad
-                collated[key] = torch.stack([b[key] for b in batch])
-                continue
-            
-            # Create padded tensor
-            padded = torch.zeros(shape, dtype=example_tensor.dtype)
-            
-            # Fill with data
-            for i, b in enumerate(batch):
-                tensor = b[key]
-                if 'token' in key or key in ['restype', 'is_protein', 'is_rna', 'is_dna', 'is_ligand']:
-                    n = tensor.shape[0]
-                    padded[i, :n] = tensor
-                elif 'ref_' in key:
-                    n = tensor.shape[0]
-                    padded[i, :n] = tensor
-                elif 'msa' in key:
+                padded = torch.zeros(shape, dtype=example_tensor.dtype)
+                for i, b in enumerate(batch):
+                    tensor = b[key]
                     if tensor.ndim == 3:
                         n_msa, n_token = tensor.shape[:2]
                         padded[i, :n_msa, :n_token] = tensor
-                    elif tensor.ndim == 2 and 'profile' not in key:
+                    else:
                         n_msa, n_token = tensor.shape
                         padded[i, :n_msa, :n_token] = tensor
-                    else:
-                        n = tensor.shape[0]
-                        padded[i, :n] = tensor
+                        
+            elif key in ['profile', 'deletion_mean']:
+                # Profile features [N_token, ...]
+                shape = (batch_size, max_n_tokens) + example_tensor.shape[1:]
+                padded = torch.zeros(shape, dtype=example_tensor.dtype)
+                for i, b in enumerate(batch):
+                    n = b[key].shape[0]
+                    padded[i, :n] = b[key]
+                    
+            elif 'template' in key:
+                # Template features - variable handling
+                if example_tensor.ndim >= 2 and example_tensor.shape[1] == batch[0]['token_index'].shape[0]:
+                    # Has token dimension
+                    shape = (batch_size,) + (example_tensor.shape[0], max_n_tokens) + example_tensor.shape[2:]
+                    padded = torch.zeros(shape, dtype=example_tensor.dtype)
+                    for i, b in enumerate(batch):
+                        n_token = b['token_index'].shape[0]
+                        padded[i, :, :n_token] = b[key][:, :n_token]
+                else:
+                    # No padding needed (e.g., empty templates)
+                    padded = torch.stack([b[key] for b in batch])
+                    
+            else:
+                # Default: try to stack (no padding)
+                try:
+                    padded = torch.stack([b[key] for b in batch])
+                except RuntimeError:
+                    # Fallback: pad to max_n_tokens
+                    shape = (batch_size, max_n_tokens) + example_tensor.shape[1:]
+                    padded = torch.zeros(shape, dtype=example_tensor.dtype)
+                    for i, b in enumerate(batch):
+                        n = b[key].shape[0]
+                        padded[i, :n] = b[key]
             
             collated[key] = padded
         
@@ -349,13 +371,15 @@ def create_dummy_structure(
     atom_counter = 0
     
     for chain_idx in range(n_chains):
+        # Generate sequence using 3-letter codes (standard amino acids)
         sequence = ''.join(np.random.choice(AMINO_ACIDS, size=n_residues))
         
         residues = []
         for res_idx in range(n_residues):
-            restype = sequence[res_idx]
+            # Use 3-letter code so it's recognized as STANDARD amino acid
+            restype = AMINO_ACIDS[res_idx % len(AMINO_ACIDS)]
             
-            # Create dummy atoms (CA, N, C, O)
+            # Create dummy atoms (CA, N, C, O) - backbone atoms
             atoms = []
             for atom_name, element, atomic_num in [
                 ('N', 'N', 7),
@@ -374,22 +398,25 @@ def create_dummy_structure(
                 atom_counter += 1
             
             residues.append({
-                'restype': restype,
+                'restype': restype,  # 3-letter code (ALA, GLY, etc.)
                 'residue_index': res_idx + 1,
                 'atoms': atoms
             })
         
-        # Create dummy MSA
+        # Create dummy MSA (use 3-letter codes)
         msa_sequences = []
         for _ in range(n_msa):
             msa_seq = ''.join(np.random.choice(AMINO_ACIDS, size=n_residues))
             deletions = [0] * n_residues
             msa_sequences.append(MSASequence(msa_seq, deletions))
         
+        # Build sequence string for the chain (3-letter codes joined)
+        chain_sequence = ''.join([residues[i]['restype'] for i in range(n_residues)])
+        
         chains.append({
             'chain_id': chr(65 + chain_idx),  # A, B, C, ...
             'mol_type': MoleculeType.PROTEIN,
-            'sequence': sequence,
+            'sequence': chain_sequence,
             'residues': residues,
             'msa': msa_sequences,
             'asym_id': chain_idx
