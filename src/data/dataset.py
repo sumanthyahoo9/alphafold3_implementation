@@ -1,0 +1,398 @@
+"""
+AlphaFold3 Dataset
+
+PyTorch Dataset that combines tokenization, featurization, and MSA processing
+into a single pipeline for training/inference.
+
+Integrates:
+- Tokenizer: Molecular structure → tokens
+- Featurizer: Tokens → model input features (Table 5)
+- MSA Pipeline: Evolutionary sequences → MSA features
+"""
+
+from typing import Dict, List, Optional, Tuple
+import numpy as np
+import torch
+from torch.utils.data import Dataset
+
+from src.data.tokenizer import AlphaFold3Tokenizer, Token, MoleculeType
+from src.data.featurizer import AlphaFold3Featurizer, Atom
+from src.data.msa_pipeline import AlphaFold3MSAPipeline, MSASequence
+
+
+class AlphaFold3Dataset(Dataset):
+    """
+    PyTorch Dataset for AlphaFold3 training/inference.
+    
+    Converts raw molecular structures into model-ready tensors.
+    
+    Usage:
+        dataset = AlphaFold3Dataset(structures)
+        batch = dataset[0]  # Returns dict of torch tensors
+    """
+    
+    def __init__(
+        self,
+        structures: List[Dict],
+        use_msa: bool = True,
+        use_templates: bool = False,
+        max_msa_rows: int = 16384,
+        training: bool = True
+    ):
+        """
+        Args:
+            structures: List of structure dicts (see format below)
+            use_msa: Whether to include MSA features
+            use_templates: Whether to include template features
+            max_msa_rows: Maximum MSA sequences
+            training: Whether in training mode (enables MSA subsampling)
+            
+        Structure format:
+        {
+            'chains': [
+                {
+                    'chain_id': 'A',
+                    'mol_type': MoleculeType.PROTEIN,
+                    'sequence': 'ACDEFGHIKLM',
+                    'residues': [
+                        {
+                            'restype': 'ALA',
+                            'residue_index': 1,
+                            'atoms': [
+                                {
+                                    'atom_index': 0,
+                                    'atom_name': 'CA',
+                                    'element': 'C',
+                                    'atomic_number': 6,
+                                    'position': [x, y, z],
+                                    'charge': 0.0
+                                },
+                                ...
+                            ]
+                        },
+                        ...
+                    ],
+                    'msa': [
+                        MSASequence(sequence, deletions, species_id),
+                        ...
+                    ]
+                },
+                ...
+            ]
+        }
+        """
+        self.structures = structures
+        self.use_msa = use_msa
+        self.use_templates = use_templates
+        self.max_msa_rows = max_msa_rows
+        self.training = training
+        
+        # Initialize processors
+        self.tokenizer = AlphaFold3Tokenizer()
+        self.featurizer = AlphaFold3Featurizer()
+        self.msa_pipeline = AlphaFold3MSAPipeline(max_msa_rows=max_msa_rows)
+    
+    def __len__(self) -> int:
+        return len(self.structures)
+    
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        """
+        Get a single example as dict of torch tensors.
+        
+        Returns:
+            Dict with keys matching AF3 Table 5 input features
+        """
+        structure = self.structures[idx]
+        
+        # Reset tokenizer for new structure
+        self.tokenizer.reset()
+        
+        # Process each chain
+        all_atoms = []
+        all_restypes = []
+        
+        entity_id_counter = 0
+        chain_to_entity = {}
+        
+        for chain_idx, chain_data in enumerate(structure['chains']):
+            chain_id = chain_data['chain_id']
+            mol_type = chain_data['mol_type']
+            sequence = chain_data['sequence']
+            residues = chain_data['residues']
+            
+            # Assign entity_id (unique per sequence)
+            if sequence not in chain_to_entity.values():
+                entity_id = entity_id_counter
+                chain_to_entity[sequence] = entity_id
+                entity_id_counter += 1
+            else:
+                entity_id = chain_to_entity[sequence]
+            
+            # Compute sym_id (index within chains of same sequence)
+            sym_id = sum(1 for s in list(chain_to_entity.values())[:chain_idx] if s == entity_id)
+            
+            # Tokenize chain
+            tokens = self.tokenizer.tokenize_chain(
+                chain_id=chain_id,
+                asym_id=chain_idx,
+                entity_id=entity_id,
+                sym_id=sym_id,
+                residues=residues,
+                mol_type=mol_type
+            )
+            
+            # Extract atoms
+            for residue in residues:
+                for atom_data in residue['atoms']:
+                    atom = Atom(
+                        atom_index=atom_data['atom_index'],
+                        atom_name=atom_data['atom_name'],
+                        element=atom_data['element'],
+                        atomic_number=atom_data['atomic_number'],
+                        position=np.array(atom_data['position']),
+                        charge=atom_data.get('charge', 0.0),
+                        mask=1.0  # Present
+                    )
+                    all_atoms.append(atom)
+            
+            # Collect restypes per token
+            for token in tokens:
+                all_restypes.append(token.restype)
+        
+        # Get token features
+        token_features = self.tokenizer.get_token_features()
+        atom_to_token_map = self.tokenizer.get_atom_to_token_mapping()
+        
+        # Featurize
+        features = self.featurizer.featurize(
+            token_features=token_features,
+            atoms=all_atoms,
+            restypes=all_restypes,
+            atom_to_token_map=atom_to_token_map
+        )
+        
+        # Add MSA features
+        if self.use_msa:
+            msa_features = self._process_msa(structure)
+            features.update(msa_features)
+        else:
+            # Placeholder MSA
+            n_tokens = len(token_features['token_index'])
+            features.update(
+                self.featurizer.create_placeholder_msa_features(n_tokens)
+            )
+        
+        # Add template features
+        if self.use_templates:
+            # TODO: Implement template processing
+            pass
+        else:
+            n_tokens = len(token_features['token_index'])
+            features.update(
+                self.featurizer.create_placeholder_template_features(n_tokens)
+            )
+        
+        # Add bond features
+        n_tokens = len(token_features['token_index'])
+        features.update(
+            self.featurizer.create_placeholder_bond_features(n_tokens)
+        )
+        
+        # Convert to torch tensors
+        tensors = self._to_torch(features)
+        
+        return tensors
+    
+    def _process_msa(self, structure: Dict) -> Dict[str, np.ndarray]:
+        """Process MSA for all chains"""
+        # Simple case: single chain
+        if len(structure['chains']) == 1:
+            chain = structure['chains'][0]
+            sequence = chain['sequence']
+            msa_seqs = chain.get('msa', [])
+            n_tokens = len(self.tokenizer.tokens)
+            
+            features = self.msa_pipeline.process_msa(
+                query_sequence=sequence,
+                msa_sequences=msa_seqs,
+                n_tokens=n_tokens
+            )
+            
+            # Subsample during training
+            if self.training:
+                features = self.msa_pipeline.subsample_msa_randomly(features)
+            
+            return features
+        
+        # Multi-chain: pair MSAs
+        else:
+            msa_per_chain = {}
+            n_tokens_per_chain = {}
+            
+            for chain in structure['chains']:
+                chain_id = chain['chain_id']
+                msa_per_chain[chain_id] = chain.get('msa', [])
+                # Count tokens for this chain
+                chain_tokens = [t for t in self.tokenizer.tokens if t.asym_id == chain['asym_id']]
+                n_tokens_per_chain[chain_id] = len(chain_tokens)
+            
+            features = self.msa_pipeline.pair_msa_by_species(
+                msa_per_chain,
+                n_tokens_per_chain
+            )
+            
+            if self.training:
+                features = self.msa_pipeline.subsample_msa_randomly(features)
+            
+            return features
+    
+    def _to_torch(self, features: Dict[str, np.ndarray]) -> Dict[str, torch.Tensor]:
+        """Convert numpy arrays to torch tensors"""
+        tensors = {}
+        
+        for key, value in features.items():
+            if isinstance(value, np.ndarray):
+                tensors[key] = torch.from_numpy(value)
+            else:
+                tensors[key] = torch.tensor(value)
+        
+        return tensors
+    
+    @staticmethod
+    def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+        """
+        Collate batch with padding.
+        
+        Pads sequences to max length in batch.
+        """
+        # Find max dimensions
+        max_n_tokens = max(b['token_index'].shape[0] for b in batch)
+        max_n_atoms = max(b['ref_pos'].shape[0] for b in batch)
+        max_n_msa = max(b['msa'].shape[0] for b in batch)
+        
+        batch_size = len(batch)
+        
+        # Initialize padded tensors
+        collated = {}
+        
+        for key in batch[0].keys():
+            example_tensor = batch[0][key]
+            
+            if 'token' in key or key in ['restype', 'is_protein', 'is_rna', 'is_dna', 'is_ligand']:
+                # Token-level features [N_token, ...]
+                shape = (batch_size, max_n_tokens) + example_tensor.shape[1:]
+            elif 'ref_' in key and key != 'ref_space_uid':
+                # Atom-level features [N_atom, ...]
+                shape = (batch_size, max_n_atoms) + example_tensor.shape[1:]
+            elif 'msa' in key or 'deletion' in key or 'profile' in key:
+                # MSA features
+                if example_tensor.ndim == 3:  # [N_msa, N_token, ...]
+                    shape = (batch_size, max_n_msa, max_n_tokens) + example_tensor.shape[2:]
+                elif example_tensor.ndim == 2:  # [N_msa, N_token]
+                    shape = (batch_size, max_n_msa, max_n_tokens)
+                else:  # [N_token, ...]
+                    shape = (batch_size, max_n_tokens) + example_tensor.shape[1:]
+            elif key == 'ref_space_uid':
+                shape = (batch_size, max_n_atoms)
+            else:
+                # Default: don't pad
+                collated[key] = torch.stack([b[key] for b in batch])
+                continue
+            
+            # Create padded tensor
+            padded = torch.zeros(shape, dtype=example_tensor.dtype)
+            
+            # Fill with data
+            for i, b in enumerate(batch):
+                tensor = b[key]
+                if 'token' in key or key in ['restype', 'is_protein', 'is_rna', 'is_dna', 'is_ligand']:
+                    n = tensor.shape[0]
+                    padded[i, :n] = tensor
+                elif 'ref_' in key:
+                    n = tensor.shape[0]
+                    padded[i, :n] = tensor
+                elif 'msa' in key:
+                    if tensor.ndim == 3:
+                        n_msa, n_token = tensor.shape[:2]
+                        padded[i, :n_msa, :n_token] = tensor
+                    elif tensor.ndim == 2 and 'profile' not in key:
+                        n_msa, n_token = tensor.shape
+                        padded[i, :n_msa, :n_token] = tensor
+                    else:
+                        n = tensor.shape[0]
+                        padded[i, :n] = tensor
+            
+            collated[key] = padded
+        
+        return collated
+
+
+def create_dummy_structure(
+    n_residues: int = 10,
+    n_chains: int = 1,
+    n_msa: int = 50
+) -> Dict:
+    """
+    Create dummy structure for testing.
+    
+    Args:
+        n_residues: Number of residues per chain
+        n_chains: Number of chains
+        n_msa: Number of MSA sequences
+        
+    Returns:
+        Structure dict compatible with AlphaFold3Dataset
+    """
+    from src.data.featurizer import AMINO_ACIDS
+    
+    chains = []
+    atom_counter = 0
+    
+    for chain_idx in range(n_chains):
+        sequence = ''.join(np.random.choice(AMINO_ACIDS, size=n_residues))
+        
+        residues = []
+        for res_idx in range(n_residues):
+            restype = sequence[res_idx]
+            
+            # Create dummy atoms (CA, N, C, O)
+            atoms = []
+            for atom_name, element, atomic_num in [
+                ('N', 'N', 7),
+                ('CA', 'C', 6),
+                ('C', 'C', 6),
+                ('O', 'O', 8)
+            ]:
+                atoms.append({
+                    'atom_index': atom_counter,
+                    'atom_name': atom_name,
+                    'element': element,
+                    'atomic_number': atomic_num,
+                    'position': np.random.randn(3).tolist(),
+                    'charge': 0.0
+                })
+                atom_counter += 1
+            
+            residues.append({
+                'restype': restype,
+                'residue_index': res_idx + 1,
+                'atoms': atoms
+            })
+        
+        # Create dummy MSA
+        msa_sequences = []
+        for _ in range(n_msa):
+            msa_seq = ''.join(np.random.choice(AMINO_ACIDS, size=n_residues))
+            deletions = [0] * n_residues
+            msa_sequences.append(MSASequence(msa_seq, deletions))
+        
+        chains.append({
+            'chain_id': chr(65 + chain_idx),  # A, B, C, ...
+            'mol_type': MoleculeType.PROTEIN,
+            'sequence': sequence,
+            'residues': residues,
+            'msa': msa_sequences,
+            'asym_id': chain_idx
+        })
+    
+    return {'chains': chains}
