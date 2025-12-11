@@ -1,0 +1,18 @@
+model:
+  # Core dimensions
+  c_token: 384  # single repr channels
+  c_pair: 128   # pair repr channels
+  
+  # Trunk
+  msa_blocks: 4
+  pairformer_blocks: 48
+  n_cycles: 4
+  
+  # Attention
+  attention_heads: 16
+  dropout_rate: 0.25
+  
+  # Diffusion
+  diffusion_blocks: 24
+  diffusion_heads: 16
+  noise_schedule: "learned"

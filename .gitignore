@@ -1,0 +1,7 @@
+# papers
+*.pdf
+# virtual environment
+alphafold3_env/
+# system files
+.DS_Store
+*.pyc

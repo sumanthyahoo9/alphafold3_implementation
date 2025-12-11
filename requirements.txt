@@ -1,0 +1,18 @@
+# Core ML framework
+torch>=2.0.0
+numpy>=1.24.0
+
+# Data processing
+biopython>=1.81
+rdkit>=2023.3.1
+
+# Configuration
+pyyaml>=6.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Utilities
+einops>=0.7.0
+scipy>=1.11.0
