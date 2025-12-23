@@ -279,13 +279,26 @@ class AlphaFold3Dataset(Dataset):
             example_tensor = batch[0][key]
             
             # Determine shape based on feature type
-            if 'token' in key or key in ['restype', 'is_protein', 'is_rna', 'is_dna', 'is_ligand', 'asym_id', 'entity_id', 'sym_id', 'residue_index']:
+            if key == 'token_bonds':
+                # Special case: 2D token-token matrix [N_token, N_token]
+                shape = (batch_size, max_n_tokens, max_n_tokens)
+                padded = torch.zeros(shape, dtype=example_tensor.dtype)
+                for i, b in enumerate(batch):
+                    n = b[key].shape[0]
+                    padded[i, :n, :n] = b[key]
+                    
+            elif 'token' in key or key in ['restype', 'is_protein', 'is_rna', 'is_dna', 'is_ligand', 'asym_id', 'entity_id', 'sym_id', 'residue_index']:
                 # Token-level features [N_token, ...]
                 shape = (batch_size, max_n_tokens) + example_tensor.shape[1:]
                 padded = torch.zeros(shape, dtype=example_tensor.dtype)
                 for i, b in enumerate(batch):
                     n = b[key].shape[0]
-                    padded[i, :n] = b[key]
+                    if example_tensor.ndim == 1:
+                        padded[i, :n] = b[key]
+                    elif example_tensor.ndim == 2:
+                        padded[i, :n, :] = b[key]
+                    else:
+                        padded[i, :n] = b[key]
                     
             elif 'ref_' in key:
                 # Atom-level features [N_atom, ...]
@@ -320,17 +333,75 @@ class AlphaFold3Dataset(Dataset):
                     padded[i, :n] = b[key]
                     
             elif 'template' in key:
-                # Template features - variable handling
-                if example_tensor.ndim >= 2 and example_tensor.shape[1] == batch[0]['token_index'].shape[0]:
-                    # Has token dimension
-                    shape = (batch_size,) + (example_tensor.shape[0], max_n_tokens) + example_tensor.shape[2:]
+                # Template features: [N_templ, N_token, ...]
+                # Special case: when N_templ=0, shapes differ in token dim but that's OK
+                n_templ_first = example_tensor.shape[0]
+                
+                if n_templ_first == 0:
+                    # All empty templates - pad token dimensions anyway for consistency
+                    if 'distogram' in key or 'unit_vector' in key:
+                        # [0, N_token, N_token, ...]
+                        extra_dims = example_tensor.shape[3:]
+                        shape = (batch_size, 0, max_n_tokens, max_n_tokens) + extra_dims
+                    elif example_tensor.ndim == 3:
+                        # [0, N_token, features]
+                        extra_dims = example_tensor.shape[2:]
+                        shape = (batch_size, 0, max_n_tokens) + extra_dims
+                    elif example_tensor.ndim == 2:
+                        # [0, N_token]
+                        shape = (batch_size, 0, max_n_tokens)
+                    else:
+                        # Unknown shape - try stacking
+                        padded = torch.stack([b[key] for b in batch])
+                        collated[key] = padded
+                        continue
+                    
+                    # Create empty padded tensor
                     padded = torch.zeros(shape, dtype=example_tensor.dtype)
-                    for i, b in enumerate(batch):
-                        n_token = b['token_index'].shape[0]
-                        padded[i, :, :n_token] = b[key][:, :n_token]
+                    
                 else:
-                    # No padding needed (e.g., empty templates)
-                    padded = torch.stack([b[key] for b in batch])
+                    # Non-empty templates - check if padding needed
+                    shapes_match = all(b[key].shape == example_tensor.shape for b in batch)
+                    
+                    if shapes_match:
+                        # All same shape - just stack
+                        padded = torch.stack([b[key] for b in batch])
+                    else:
+                        # Different shapes - need padding
+                        max_n_templ = max(b[key].shape[0] for b in batch)
+                        
+                        if 'distogram' in key or 'unit_vector' in key:
+                            # [N_templ, N_token, N_token, ...]
+                            extra_dims = example_tensor.shape[3:]
+                            shape = (batch_size, max_n_templ, max_n_tokens, max_n_tokens) + extra_dims
+                            padded = torch.zeros(shape, dtype=example_tensor.dtype)
+                            for i, b in enumerate(batch):
+                                n_templ = b[key].shape[0]
+                                n_token = b['token_index'].shape[0]
+                                if n_templ > 0:
+                                    padded[i, :n_templ, :n_token, :n_token] = b[key][:, :n_token, :n_token]
+                        elif example_tensor.ndim == 3:
+                            # [N_templ, N_token, features]
+                            extra_dims = example_tensor.shape[2:]
+                            shape = (batch_size, max_n_templ, max_n_tokens) + extra_dims
+                            padded = torch.zeros(shape, dtype=example_tensor.dtype)
+                            for i, b in enumerate(batch):
+                                n_templ = b[key].shape[0]
+                                n_token = b['token_index'].shape[0]
+                                if n_templ > 0:
+                                    padded[i, :n_templ, :n_token] = b[key][:, :n_token]
+                        elif example_tensor.ndim == 2:
+                            # [N_templ, N_token]
+                            shape = (batch_size, max_n_templ, max_n_tokens)
+                            padded = torch.zeros(shape, dtype=example_tensor.dtype)
+                            for i, b in enumerate(batch):
+                                n_templ = b[key].shape[0]
+                                n_token = b['token_index'].shape[0]
+                                if n_templ > 0:
+                                    padded[i, :n_templ, :n_token] = b[key][:, :n_token]
+                        else:
+                            # Fallback
+                            padded = torch.stack([b[key] for b in batch])
                     
             else:
                 # Default: try to stack (no padding)
