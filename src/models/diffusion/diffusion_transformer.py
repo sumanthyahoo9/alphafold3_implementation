@@ -22,10 +22,9 @@ Architecture:
 This is the token-level processor between AtomAttentionEncoder and
 AtomAttentionDecoder in the diffusion module.
 """
-
+from typing import Optional
 import torch
 import torch.nn as nn
-from typing import Optional
 
 from src.models.diffusion.adaln import AdaptiveLayerNorm
 from src.models.diffusion.conditioned_transition import ConditionedTransitionBlock
