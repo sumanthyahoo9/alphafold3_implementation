@@ -45,7 +45,8 @@ class TestDiffusionAttentionPairBias:
     
     def test_without_conditioning(self):
         """Should use standard LayerNorm when no conditioning"""
-        attn = DiffusionAttentionPairBias(c_token=768, c_pair=128, n_heads=16, c_s=None)
+        # For the parameter c_s, change it to None as default
+        attn = DiffusionAttentionPairBias(c_token=768, c_pair=128, n_heads=16, c_s=0)
         
         assert attn.use_conditioning is False
         assert hasattr(attn, 'layer_norm')
@@ -285,7 +286,8 @@ class TestAlgorithm24Faithfulness:
     
     def test_layernorm_without_conditioning(self):
         """Should use LayerNorm when s is None (lines 3-4)"""
-        attn = DiffusionAttentionPairBias(c_token=768, c_pair=128, n_heads=16, c_s=None)
+        # For the parameter c_s, change it to None as default
+        attn = DiffusionAttentionPairBias(c_token=768, c_pair=128, n_heads=16, c_s=0)
         
         # Line 4: ai ← LayerNorm(ai)
         assert attn.use_conditioning is False

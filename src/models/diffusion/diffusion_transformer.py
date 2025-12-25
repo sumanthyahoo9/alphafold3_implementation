@@ -369,7 +369,7 @@ class DiffusionTransformerBlock(nn.Module):
 
 
 def create_dummy_diffusion_transformer_input(
-    batch_size: int = None,
+    batch_size: int = 0, # Change to None to clear unit tests
     n_token: int = 10,
     c_token: int = 768,
     c_pair: int = 128,

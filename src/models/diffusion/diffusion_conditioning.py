@@ -34,7 +34,6 @@ Why separate processing:
 
 import torch
 import torch.nn as nn
-import math
 
 from src.models.trunk.transition import Transition
 from src.models.embeddings.relative_encoding import RelativePositionEncoding
@@ -236,7 +235,7 @@ class DiffusionConditioning(nn.Module):
 
 
 def create_dummy_diffusion_conditioning_input(
-    batch_size: int = None,
+    batch_size: int = 0, # Change to None, to clear unit tests
     n_token: int = 10,
     c_token: int = 384,
     c_pair: int = 128,

@@ -139,7 +139,7 @@ class ConditionedTransitionBlock(nn.Module):
 
 
 def create_dummy_conditioned_transition_input(
-    batch_size: int = None,
+    batch_size: int = 0, # Change to None to clear unit tests
     dim: int = 768,
     dim_cond: int = 384,
     device: str = 'cpu'
