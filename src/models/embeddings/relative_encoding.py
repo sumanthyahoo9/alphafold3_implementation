@@ -13,10 +13,9 @@ Key features:
 - Relative chain positions (sym_id differences for different chains)
 - Same entity mask (whether tokens are from same sequence)
 """
-
+from typing import Dict
 import torch
 import torch.nn as nn
-from typing import Dict
 
 
 class RelativePositionEncoding(nn.Module):
