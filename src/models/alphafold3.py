@@ -21,10 +21,9 @@ Key features:
 Architecture:
     Input → Embeddings → [Recycle: MSA → Pairformer] × 4 → Diffusion → Structure
 """
-
+from typing import Dict, Optional
 import torch
 import torch.nn as nn
-from typing import Dict, Optional
 
 from src.models.embeddings.input_embedder import InputFeatureEmbedder
 from src.models.embeddings.relative_encoding import RelativePositionEncoding
