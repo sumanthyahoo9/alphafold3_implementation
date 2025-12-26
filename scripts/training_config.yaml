@@ -1,0 +1,112 @@
+# AlphaFold3 Training Configuration
+# Example configuration for distributed training
+
+# Output directory
+output_dir: ./outputs/alphafold3_run1
+
+# Model architecture
+model:
+  c_token: 384        # Token representation dimension
+  c_pair: 128         # Pair representation dimension
+  c_atom: 128         # Atom representation dimension
+  c_atompair: 16      # Atom pair dimension
+  n_cycles: 4         # Number of recycling iterations
+  
+  # Trunk
+  msa_blocks: 4       # MSA module blocks
+  pairformer_blocks: 48  # Pairformer blocks
+  
+  # Diffusion
+  diffusion_blocks: 24   # Diffusion transformer blocks
+  
+  # Confidence head
+  confidence_blocks: 4
+
+# Data
+data:
+  train_dir: ./data/pdb/train
+  val_dir: ./data/pdb/val
+  
+  batch_size: 1              # Per-GPU batch size
+  val_batch_size: 1          # Validation batch size
+  num_workers: 4             # DataLoader workers
+  
+  max_tokens: 512            # Maximum sequence length
+  max_atoms: 10000           # Maximum atoms
+  
+  # Data augmentation
+  random_crop: true
+  crop_size: 384
+
+# Optimizer
+optimizer:
+  type: adamw                # adam or adamw
+  learning_rate: 1.0e-4      # Base learning rate
+  betas: [0.9, 0.999]        # Adam betas
+  eps: 1.0e-8                # Adam epsilon
+  weight_decay: 0.01         # Weight decay (L2 regularization)
+
+# Learning rate scheduler
+scheduler:
+  type: cosine               # cosine, warmup_cosine, or none
+  T_max: 100000              # Cosine annealing period
+  eta_min: 1.0e-6            # Minimum learning rate
+  
+  # Warmup (if using warmup_cosine)
+  warmup_steps: 10000
+  warmup_init_lr: 1.0e-7
+
+# Loss functions
+losses:
+  # Diffusion loss weights
+  alpha_bond: 0.0            # 0 for training, 1 for fine-tuning
+  sigma_data: 16.0           # Data variance
+  
+  # Molecule upweighting
+  alpha_dna: 5.0             # DNA upweight factor
+  alpha_rna: 5.0             # RNA upweight factor
+  alpha_ligand: 10.0         # Ligand upweight factor
+  
+  # LDDT thresholds
+  lddt_thresholds: [0.5, 1.0, 2.0, 4.0]
+
+# Training
+training:
+  num_epochs: 100
+  
+  # Mixed precision
+  mixed_precision: true      # Use automatic mixed precision (FP16/BF16)
+  
+  # Gradient accumulation
+  gradient_accumulation_steps: 8  # Effective batch = batch_size * world_size * grad_accum
+  
+  # Gradient clipping
+  gradient_clip: 1.0         # Max gradient norm (0 to disable)
+  
+  # Checkpointing
+  save_every: 5              # Save checkpoint every N epochs
+  keep_last_n: 3             # Keep last N checkpoints
+
+# Logging
+logging:
+  log_interval: 100          # Log every N steps
+  
+  # Weights & Biases
+  use_wandb: false           # Enable W&B logging
+  wandb_project: alphafold3
+  wandb_run_name: null       # Auto-generate if null
+
+# Hardware
+hardware:
+  # Multi-GPU settings handled by torchrun
+  # Just specify in launch command
+  
+  # Memory optimizations
+  gradient_checkpointing: false  # Enable to save memory (slower)
+  cpu_offload: false            # Offload to CPU (very slow)
+
+# Distributed training
+# Launch with: torchrun --nproc_per_node=8 train.py --config config.yaml
+# Multi-node: torchrun --nproc_per_node=8 --nnodes=4 --node_rank=0 \
+#                      --master_addr="192.168.1.1" --master_port=29500 \
+#                      train.py --config config.yaml

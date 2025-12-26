@@ -13,32 +13,30 @@ Supports:
 
 Usage:
     # Single GPU
-    python train.py --config config.yaml
+    python train.py --config training_config.yaml
     
     # Multi-GPU (DDP)
-    torchrun --nproc_per_node=8 train.py --config config.yaml
+    torchrun --nproc_per_node=8 train.py --config training_config.yaml
     
     # Multi-node
     torchrun --nproc_per_node=8 --nnodes=4 --node_rank=0 \
              --master_addr="192.168.1.1" --master_port=29500 \
-             train.py --config config.yaml
+             train.py --config training_config.yaml
 """
-
+import os
+import time
+from pathlib import Path
+from typing import Dict
+from datetime import datetime
 import argparse
+import yaml
 import torch
-import torch.nn as nn
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler
 from torch.cuda.amp import autocast, GradScaler
-import numpy as np
-import yaml
-import os
-import time
-from pathlib import Path
-from typing import Dict, Optional
-import json
-from datetime import datetime
+from torch.optim.lr_scheduler import CosineAnnealingLR
+import wandb
 
 # Imports for model and data
 from src.models.alphafold3 import AlphaFold3
@@ -227,7 +225,6 @@ class Trainer:
         sched_type = sched_config.get('type', 'cosine').lower()
         
         if sched_type == 'cosine':
-            from torch.optim.lr_scheduler import CosineAnnealingLR
             self.scheduler = CosineAnnealingLR(
                 self.optimizer,
                 T_max=sched_config.get('T_max', 100000),
@@ -264,7 +261,7 @@ class Trainer:
         if self.rank == 0:
             print("Loss functions initialized:")
             print(f"  - Diffusion loss (α_bond={loss_config.get('alpha_bond', 0.0)})")
-            print(f"  - Smooth LDDT loss")
+            print("  - Smooth LDDT loss")
     
     def _setup_dataloaders(self):
         """Initialize dataloaders."""
@@ -343,7 +340,6 @@ class Trainer:
             # Optional: W&B integration
             if log_config.get('use_wandb', False):
                 try:
-                    import wandb
                     wandb.init(
                         project=log_config.get('wandb_project', 'alphafold3'),
                         name=log_config.get('wandb_run_name', f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"),
@@ -445,7 +441,6 @@ class Trainer:
                       f"LR: {lr:.2e}")
                 
                 if self.use_wandb:
-                    import wandb
                     wandb.log({
                         'train/loss': loss.item() * self.grad_accum_steps,
                         'train/lddt': lddt_loss.item(),
@@ -613,7 +608,6 @@ class Trainer:
                       f"Val Time: {val_time:.1f}s")
                 
                 if self.use_wandb:
-                    import wandb
                     wandb.log({
                         'val/loss': val_losses['total'],
                         'val/lddt': val_losses['lddt'],
