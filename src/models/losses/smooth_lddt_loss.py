@@ -22,10 +22,9 @@ LDDT (Local Distance Difference Test):
 Architecture:
     (x_pred, x_gt) → Pairwise distances → Distance errors → Smooth score → LDDT
 """
-
+from typing import Optional
 import torch
 import torch.nn as nn
-from typing import Optional
 
 
 class SmoothLDDTLoss(nn.Module):

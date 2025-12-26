@@ -21,10 +21,9 @@ Key features:
 - Conditioning from trunk via single and pair representations
 - Variance-preserving scaling
 """
-
+from typing import Dict
 import torch
 import torch.nn as nn
-from typing import Dict
 
 from src.models.diffusion.diffusion_conditioning import DiffusionConditioning
 from src.models.diffusion.diffusion_transformer import DiffusionTransformer

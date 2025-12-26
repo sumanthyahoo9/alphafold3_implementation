@@ -19,11 +19,9 @@ Key features:
 Architecture:
     (s, z, x_pred) → Distance embedding → Pairformer → Confidence outputs
 """
-
+from typing import Tuple
 import torch
 import torch.nn as nn
-from typing import Dict, Tuple
-import math
 
 from src.models.trunk.pairformer import PairformerStack
 

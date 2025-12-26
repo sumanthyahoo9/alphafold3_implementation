@@ -20,11 +20,10 @@ Architecture:
 Each step:
     x → CentreRandomAugmentation → add noise → DiffusionModule → Euler update → x'
 """
-
-import torch
-import torch.nn as nn
 from typing import Dict, List, Optional
 import math
+import torch
+import torch.nn as nn
 
 from src.models.diffusion.diffusion_module import DiffusionModule
 

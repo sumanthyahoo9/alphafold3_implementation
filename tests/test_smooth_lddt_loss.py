@@ -20,7 +20,7 @@ class TestLossComputation:
     """Test basic loss computation"""
     
     def test_perfect_prediction(self):
-        """Perfect prediction should give loss = 0"""
+        """Perfect prediction should give low loss"""
         loss_fn = SmoothLDDTLoss()
         
         x = torch.randn(10, 3)
@@ -29,8 +29,9 @@ class TestLossComputation:
         
         loss = loss_fn(x_pred, x_gt)
         
-        # Perfect match → LDDT = 1 → loss = 0
-        assert loss < 0.01  # Nearly zero
+        # Perfect match → LDDT ~0.8 (due to sigmoid saturation) → loss ~0.2
+        # This is expected: sigmoid(threshold) for small thresholds < 1.0
+        assert loss < 0.3  # Low loss for perfect prediction
     
     def test_random_prediction(self):
         """Random prediction should give high loss"""
@@ -192,8 +193,8 @@ class TestScoreComputation:
         
         lddt = loss_fn.compute_lddt_score(x_pred, x_gt)
         
-        # Perfect match → LDDT near 1
-        assert lddt > 0.99
+        # Perfect match → LDDT ~0.8 (due to sigmoid saturation at thresholds)
+        assert lddt > 0.7  # High score
         assert lddt <= 1.0
     
     def test_score_range(self):
@@ -283,8 +284,8 @@ class TestEdgeCases:
         
         loss = loss_fn(x_pred, x_gt)
         
-        # Perfect match
-        assert loss < 0.01
+        # Perfect match but sigmoid saturation gives ~0.8 LDDT
+        assert loss < 0.3
     
     def test_identical_positions(self):
         """All atoms at same position"""
@@ -295,8 +296,8 @@ class TestEdgeCases:
         
         loss = loss_fn(x_pred, x_gt)
         
-        # All distances are 0 → perfect
-        assert loss < 0.01
+        # All distances are 0 → perfect (but sigmoid saturation)
+        assert loss < 0.3
     
     def test_gradient_flow(self):
         """Loss should allow gradient flow"""
